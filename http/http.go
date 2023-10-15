@@ -43,8 +43,7 @@ func (h *Module) AddEndpoint(w http.ResponseWriter, r *http.Request, _ httproute
 	err := h.config.Transaction().Add(description, date, amount)
 	if err != nil {
 		if errors.Is(err, types.InvalidInputError) {
-			w.WriteHeader(http.StatusBadRequest)
-			writeErrorResponse(w, err.Error())
+			writeErrorResponse(w, http.StatusBadRequest, err.Error())
 			return
 		}
 		w.WriteHeader(http.StatusInternalServerError)
@@ -65,14 +64,12 @@ func (h *Module) GetEndpoint(w http.ResponseWriter, r *http.Request, params http
 	outRec, err := h.config.Transaction().Get(params.ByName("id"), target)
 	if err != nil {
 		if errors.Is(err, types.RecordNotFound) {
-			w.WriteHeader(http.StatusNotFound)
-			writeErrorResponse(w, types.RecordNotFound.Error())
+			writeErrorResponse(w, http.StatusNotFound, types.RecordNotFound.Error())
 			return
 		}
 
 		if errors.Is(err, types.TargetCurrencyUnavailable) {
-			w.WriteHeader(http.StatusInternalServerError)
-			writeErrorResponse(w, "the transaction cannot be converted to the target currency")
+			writeErrorResponse(w, http.StatusInternalServerError, "the transaction cannot be converted to the target currency")
 			return
 		}
 
@@ -86,12 +83,12 @@ func (h *Module) GetEndpoint(w http.ResponseWriter, r *http.Request, params http
 		return
 	}
 
-	w.WriteHeader(http.StatusOK)
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(b)
 }
 
-func writeErrorResponse(w http.ResponseWriter, message string) {
+func writeErrorResponse(w http.ResponseWriter, responseStatusCode int, message string) {
 	var (
 		b   []byte
 		err error
@@ -104,5 +101,6 @@ func writeErrorResponse(w http.ResponseWriter, message string) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(responseStatusCode)
 	_, _ = w.Write(b)
 }

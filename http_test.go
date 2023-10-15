@@ -2,6 +2,7 @@ package transactiondemo_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -17,9 +18,11 @@ import (
 	goUrl "net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
+var ErrInvalidContentType = errors.New("invalid Content-Type")
 var _ = Describe("Run HTTP Server", func() {
 	var (
 		ts          *httptest.Server
@@ -111,6 +114,11 @@ var _ = Describe("Run HTTP Server", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(outRec.Rate).To(Equal(testExchange))
 		Expect(outRec.Converted).To(Equal(math.Round(amount*testExchange*100) / 100))
+
+		outRec, respString, err = sendGetRequest(as.URL, list[0].ID, "")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(outRec.Rate).To(Equal(float64(1)))
+		Expect(outRec.Converted).To(Equal(amount))
 	})
 
 	It("returns error response for invalid input when adding", func() {
@@ -120,11 +128,13 @@ var _ = Describe("Run HTTP Server", func() {
 		GinkgoWriter.Println("response string", respString)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(respCode).ToNot(Equal(http.StatusOK))
+		Expect(errors.Is(err, ErrInvalidContentType)).To(BeFalse())
 	})
 
 	It("returns appropriate error message when no record found", func() {
 		outRec, respString, err = sendGetRequest(as.URL, "random ID", currDesc)
 		Expect(err).To(HaveOccurred())
+		Expect(errors.Is(err, ErrInvalidContentType)).To(BeFalse())
 	})
 
 	When("no record returned from fiscal data server", func() {
@@ -141,6 +151,7 @@ var _ = Describe("Run HTTP Server", func() {
 
 			outRec, respString, err = sendGetRequest(as.URL, list[0].ID, currDesc)
 			Expect(err).To(HaveOccurred())
+			Expect(errors.Is(err, ErrInvalidContentType)).To(BeFalse())
 		})
 	})
 })
@@ -167,11 +178,21 @@ func sendAddRequest(url, description, date, amount string) (int, string, error) 
 		_ = resp.Body.Close()
 	}()
 
+	if resp.StatusCode != http.StatusOK {
+		if err = checkContentType(resp); err != nil {
+			return 0, "", err
+		}
+	}
 	return resp.StatusCode, string(b), nil
 }
 
 func sendGetRequest(url, id, targetCurrency string) (outRec record.ConvertedTransaction, respStr string, err error) {
-	url = fmt.Sprintf("%s/get/%s?target=%s", url, id, targetCurrency)
+	if targetCurrency == "" {
+		url = fmt.Sprintf("%s/get/%s", url, id)
+	} else {
+		url = fmt.Sprintf("%s/get/%s?target=%s", url, id, targetCurrency)
+
+	}
 	client := &http.Client{}
 
 	var resp *http.Response
@@ -191,8 +212,16 @@ func sendGetRequest(url, id, targetCurrency string) (outRec record.ConvertedTran
 
 	GinkgoWriter.Println("response data:", string(b))
 	if resp.StatusCode != http.StatusOK {
-		err = fmt.Errorf("http response not OK: %d", resp.StatusCode)
+		if err = checkContentType(resp); err != nil {
+			err = fmt.Errorf("http response not OK: %d and %w", resp.StatusCode, err)
+		} else {
+			err = fmt.Errorf("http response not OK: %d", resp.StatusCode)
+		}
 		respStr = string(b)
+		return
+	}
+
+	if err = checkContentType(resp); err != nil {
 		return
 	}
 
@@ -200,4 +229,13 @@ func sendGetRequest(url, id, targetCurrency string) (outRec record.ConvertedTran
 		return
 	}
 	return
+}
+
+func checkContentType(resp *http.Response) (err error) {
+	ct := resp.Header.Get("Content-Type")
+	if !strings.HasPrefix(ct, "application/json") {
+		err = fmt.Errorf("unexpected http response Content-Type header: %s; %w", ct, ErrInvalidContentType)
+		return
+	}
+	return nil
 }
